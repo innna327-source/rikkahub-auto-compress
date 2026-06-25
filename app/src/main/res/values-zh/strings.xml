@@ -440,7 +440,7 @@
     <string name="usage_reminder_monitor_title">使用提醒运行中</string>
     <string name="usage_reminder_monitor_desc">正在监控已开启的应用时长限制</string>
     <string name="usage_reminder_limit_title">%1$s 已超过 %2$d 分钟</string>
-    <string name="usage_reminder_limit_content">已经玩了：%1$s\n%2$s</string>
+    <string name="usage_reminder_limit_content">%1$s 已使用 %2$s\n%3$s</string>
     <string name="usage_reminder_ignore_today">今日忽略</string>
     <string name="usage_reminder_fallback_quote">已经到提醒线了，先停一下，给自己两分钟。</string>
     <string name="usage_reminder_duration_hours">%1$d 小时 %2$d 分钟</string>

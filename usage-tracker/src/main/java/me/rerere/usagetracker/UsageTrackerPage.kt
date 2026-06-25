@@ -9,6 +9,8 @@ import android.os.Build
 import android.provider.Settings
 import android.text.format.DateFormat
 import android.widget.ImageView
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,6 +49,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,6 +62,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.AppStore
 import me.rerere.hugeicons.stroke.Rocket01
@@ -80,6 +86,37 @@ fun UsageTrackerPage(
     val reader = remember(context) { UsageStatsReader(context) }
     var refreshKey by remember { mutableIntStateOf(0) }
     var selectedPeriod by remember { mutableStateOf(UsageStatsPeriod.Today) }
+    var reminderMessagesImportResult by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    val reminderMessagesImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val result = runCatching {
+                    withContext(Dispatchers.IO) {
+                        val content = context.contentResolver.openInputStream(uri)
+                            ?.bufferedReader()
+                            ?.use { it.readText() }
+                            ?: error("无法读取所选文件")
+                        parseUsageReminderMessages(content)
+                    }
+                }
+                result.onSuccess { messages ->
+                    onUsageReminderConfigChange(
+                        usageReminderConfig.copy(reminderMessages = messages)
+                    )
+                    reminderMessagesImportResult = if (messages.isEmpty()) {
+                        "已清空提醒文案"
+                    } else {
+                        "已导入 ${messages.size} 条提醒文案"
+                    }
+                }.onFailure { error ->
+                    reminderMessagesImportResult = "导入失败：${error.message ?: "JSON 格式不正确"}"
+                }
+            }
+        }
+    }
     val hasAccess by produceState(initialValue = reader.hasUsageAccess(), refreshKey) {
         value = reader.hasUsageAccess()
     }
@@ -157,6 +194,17 @@ fun UsageTrackerPage(
                         onOpenNotificationSettings = { context.openNotificationSettings() },
                     )
                 }
+                item {
+                    ReminderMessagesCard(
+                        messageCount = usageReminderConfig.reminderMessages.size,
+                        importResult = reminderMessagesImportResult,
+                        onImport = {
+                            reminderMessagesImportLauncher.launch(
+                                arrayOf("application/json", "text/json")
+                            )
+                        },
+                    )
+                }
 
                 if (usages.isEmpty()) {
                     item {
@@ -216,6 +264,53 @@ private fun ReminderIntroCard(
                 OutlinedButton(onClick = onOpenNotificationSettings) {
                     Text("打开通知设置")
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReminderMessagesCard(
+    messageCount: Int,
+    importResult: String?,
+    onImport: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = "提醒文案",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = if (messageCount == 0) {
+                    "默认不包含提醒文案，通知只显示使用时长。"
+                } else {
+                    "已导入 $messageCount 条提醒文案，触发提醒时会随机显示一条。"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = "支持 JSON 字符串数组，或包含 message 字段的对象数组。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(onClick = onImport) {
+                Text("上传 JSON 文件")
+            }
+            importResult?.let { result ->
+                Text(
+                    text = result,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (result.startsWith("导入失败")) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                )
             }
         }
     }

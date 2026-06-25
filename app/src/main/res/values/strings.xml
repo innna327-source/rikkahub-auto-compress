@@ -444,7 +444,7 @@
     <string name="usage_reminder_monitor_title">Usage reminders running</string>
     <string name="usage_reminder_monitor_desc">Watching enabled app limits</string>
     <string name="usage_reminder_limit_title">%1$s has exceeded %2$d min</string>
-    <string name="usage_reminder_limit_content">Already used: %1$s\n%2$s</string>
+    <string name="usage_reminder_limit_content">%1$s has been used for %2$s\n%3$s</string>
     <string name="usage_reminder_ignore_today">Ignore today</string>
     <string name="usage_reminder_fallback_quote">Time is up. Take a short break before continuing.</string>
     <string name="usage_reminder_duration_hours">%1$d h %2$d min</string>

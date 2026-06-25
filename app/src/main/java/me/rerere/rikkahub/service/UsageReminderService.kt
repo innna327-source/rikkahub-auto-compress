@@ -22,15 +22,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.SerializationException
 import me.rerere.rikkahub.RouteActivity
 import me.rerere.rikkahub.EXTRA_OPEN_USAGE_TRACKER
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.USAGE_LIMIT_REMINDER_CHANNEL_ID
 import me.rerere.rikkahub.USAGE_REMINDER_MONITOR_CHANNEL_ID
 import me.rerere.rikkahub.data.datastore.SettingsStore
-import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.usagetracker.UsageReminderAppState
 import me.rerere.usagetracker.UsageReminderConfig
 import me.rerere.usagetracker.UsageReminderRule
@@ -143,7 +140,12 @@ class UsageReminderService : Service() {
             if (usageMillis >= rule.thresholdMinutes * 60_000L) {
                 val remindedState = baseState.copy(reminderCount = baseState.reminderCount + 1)
                 nextStates[event.packageName] = remindedState
-                sendLimitNotification(rule, usageMillis, remindedState.reminderCount)
+                sendLimitNotification(
+                    rule = rule,
+                    usageMillis = usageMillis,
+                    reminderCount = remindedState.reminderCount,
+                    reminderMessages = settings.usageReminderConfig.reminderMessages,
+                )
             } else {
                 nextStates[event.packageName] = baseState
             }
@@ -199,7 +201,12 @@ class UsageReminderService : Service() {
             .build()
     }
 
-    private fun sendLimitNotification(rule: UsageReminderRule, usageMillis: Long, reminderCount: Int) {
+    private fun sendLimitNotification(
+        rule: UsageReminderRule,
+        usageMillis: Long,
+        reminderCount: Int,
+        reminderMessages: List<String>,
+    ) {
         val contentIntent = PendingIntent.getActivity(
             this,
             REQUEST_OPEN_USAGE_TRACKER + notificationIdFor(rule.packageName),
@@ -209,7 +216,7 @@ class UsageReminderService : Service() {
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val content = buildReminderContent(usageMillis)
+        val content = buildReminderContent(rule.label, usageMillis, reminderMessages)
         val builder = NotificationCompat.Builder(this, USAGE_LIMIT_REMINDER_CHANNEL_ID)
             .setSmallIcon(R.drawable.small_icon)
             .setContentTitle(
@@ -246,29 +253,14 @@ class UsageReminderService : Service() {
         NotificationManagerCompat.from(this).notify(notificationIdFor(rule.packageName), builder.build())
     }
 
-    private fun buildReminderContent(usageMillis: Long): String {
-        val quotes = loadQuotes()
-        val quote = if (quotes.isEmpty()) {
-            getString(R.string.usage_reminder_fallback_quote)
-        } else {
-            quotes.random()
-        }
-        return getString(R.string.usage_reminder_limit_content, formatDuration(usageMillis), quote)
-    }
-
-    private fun loadQuotes(): List<String> {
-        return runCatching {
-            assets.open("usage_reminder_quotes.json").bufferedReader().use { reader ->
-                JsonInstant.decodeFromString<List<UsageReminderQuote>>(reader.readText())
-            }.map { it.message }
-                .filter { it.isNotBlank() }
-        }.recoverCatching { error ->
-            if (error is SerializationException) throw error
-            emptyList()
-        }.getOrElse {
-            Log.w(TAG, "loadQuotes failed", it)
-            emptyList()
-        }
+    private fun buildReminderContent(appLabel: String, usageMillis: Long, reminderMessages: List<String>): String {
+        val message = reminderMessages.filter { it.isNotBlank() }.randomOrNull().orEmpty()
+        return getString(
+            R.string.usage_reminder_limit_content,
+            appLabel,
+            formatDuration(usageMillis),
+            message,
+        ).trimEnd()
     }
 
     private fun formatDuration(millis: Long): String {
@@ -282,13 +274,6 @@ class UsageReminderService : Service() {
             else -> getString(R.string.usage_reminder_duration_zero)
         }
     }
-
-    @Serializable
-    private data class UsageReminderQuote(
-        val id: Int = 0,
-        val trigger_scenario: String = "",
-        val message: String,
-    )
 
     companion object {
         const val ACTION_START = "me.rerere.rikkahub.usage_reminder.START"
