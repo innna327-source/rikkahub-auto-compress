@@ -118,17 +118,52 @@ class MiMoTTSProvider : TTSProvider<TTSProviderSetting.MiMo> {
         request: TTSRequest
     ): Flow<AudioChunk> = flow {
         // OpenAI 兼容的 chat/completions SSE 流式返回 音频增量在 delta.audio.data
+        val model = providerSetting.model.trim()
+        val voice = providerSetting.voice.trim()
+        if (model.isMiMoVoiceCloneModel() && !voice.isMiMoAudioDataUrl()) {
+            error("MiMo voice clone requires an uploaded mp3/wav audio sample")
+        }
         val requestBody = buildJsonObject {
-            put("model", providerSetting.model)
+            put("model", model)
             put("messages", buildJsonArray {
-                add(buildJsonObject {
-                    put("role", "assistant")
-                    put("content", request.text)
-                })
+                when {
+                    model.isMiMoVoiceDesignModel() -> {
+                        add(buildJsonObject {
+                            put("role", "user")
+                            put("content", voice)
+                        })
+                        add(buildJsonObject {
+                            put("role", "assistant")
+                            put("content", request.text)
+                        })
+                    }
+
+                    model.isMiMoVoiceCloneModel() -> {
+                        add(buildJsonObject {
+                            put("role", "user")
+                            put("content", "")
+                        })
+                        add(buildJsonObject {
+                            put("role", "assistant")
+                            put("content", request.text)
+                        })
+                    }
+
+                    else -> {
+                        add(buildJsonObject {
+                            put("role", "assistant")
+                            put("content", request.text)
+                        })
+                    }
+                }
             })
             put("audio", buildJsonObject {
                 put("format", "pcm16")
-                put("voice", providerSetting.voice)
+                if (model.isMiMoVoiceDesignModel()) {
+                    put("optimize_text_preview", true)
+                } else {
+                    put("voice", voice)
+                }
             })
             put("stream", true)
         }
@@ -144,12 +179,24 @@ class MiMoTTSProvider : TTSProvider<TTSProviderSetting.MiMo> {
             .build()
 
         val processor = MiMoSseProcessor(
-            model = providerSetting.model,
-            voice = providerSetting.voice
+            model = model,
+            voice = voice
         )
 
         httpClient.sseFlow(httpRequest).collect { event ->
             processor.process(event)?.let { emit(it) }
         }
+    }
+
+    private fun String.isMiMoVoiceDesignModel(): Boolean {
+        return equals("mimo-v2.5-tts-voicedesign", ignoreCase = true)
+    }
+
+    private fun String.isMiMoVoiceCloneModel(): Boolean {
+        return equals("mimo-v2.5-tts-voiceclone", ignoreCase = true)
+    }
+
+    private fun String.isMiMoAudioDataUrl(): Boolean {
+        return startsWith("data:audio/", ignoreCase = true) && contains(";base64,", ignoreCase = true)
     }
 }

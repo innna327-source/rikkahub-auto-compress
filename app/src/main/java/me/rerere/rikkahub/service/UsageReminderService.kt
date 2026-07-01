@@ -113,12 +113,6 @@ class UsageReminderService : Service() {
             startMillis = (earliestKnownEvent - 1_000L).coerceAtLeast(0L),
             endMillis = System.currentTimeMillis(),
         )
-        if (events.isEmpty()) {
-            if (state.date != settings.usageReminderState.date) {
-                settingsStore.update { it.copy(usageReminderState = state) }
-            }
-            return
-        }
 
         val rulesByPackage = enabledRules.associateBy { it.packageName }
         val nextStates = state.appStates.toMutableMap()
@@ -135,20 +129,29 @@ class UsageReminderService : Service() {
                 changed = true
                 continue
             }
+            nextStates[event.packageName] = baseState
+            changed = true
+        }
 
-            val usageMillis = reader.loadUsageMillis(event.packageName, UsageStatsPeriod.Today)
-            if (usageMillis >= rule.thresholdMinutes * 60_000L) {
-                val remindedState = baseState.copy(reminderCount = baseState.reminderCount + 1)
-                nextStates[event.packageName] = remindedState
-                sendLimitNotification(
-                    rule = rule,
-                    usageMillis = usageMillis,
-                    reminderCount = remindedState.reminderCount,
-                    reminderMessages = settings.usageReminderConfig.reminderMessages,
-                )
-            } else {
-                nextStates[event.packageName] = baseState
-            }
+        for (rule in enabledRules) {
+            val current = nextStates[rule.packageName] ?: UsageReminderAppState()
+            if (current.ignored) continue
+
+            val usageMillis = reader.loadUsageMillis(rule.packageName, UsageStatsPeriod.Today)
+            if (usageMillis < rule.thresholdMinutes * 60_000L) continue
+            if (usageMillis <= current.lastReminderUsageMillis) continue
+
+            val remindedState = current.copy(
+                reminderCount = current.reminderCount + 1,
+                lastReminderUsageMillis = usageMillis,
+            )
+            nextStates[rule.packageName] = remindedState
+            sendLimitNotification(
+                rule = rule,
+                usageMillis = usageMillis,
+                reminderCount = remindedState.reminderCount,
+                reminderMessages = settings.usageReminderConfig.reminderMessages,
+            )
             changed = true
         }
 
@@ -283,7 +286,7 @@ class UsageReminderService : Service() {
         private const val NOTIFICATION_ID_MONITOR = 200_100
         private const val REQUEST_OPEN_USAGE_TRACKER = 200_200
         private const val REQUEST_IGNORE_BASE = 200_300
-        private const val CHECK_INTERVAL_MILLIS = 5_000L
+        private const val CHECK_INTERVAL_MILLIS = 5 * 60_000L
         private const val CHECK_LOOKBACK_MILLIS = 60_000L
         private const val IGNORE_ACTION_START_COUNT = 3
 

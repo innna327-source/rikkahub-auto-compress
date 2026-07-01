@@ -54,6 +54,7 @@ import me.rerere.hugeicons.stroke.Menu03
 import me.rerere.hugeicons.stroke.MessageAdd01
 import me.rerere.hugeicons.stroke.View
 import me.rerere.hugeicons.stroke.ViewOff
+import me.rerere.hugeicons.stroke.Voice
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.findProvider
@@ -254,6 +255,7 @@ private fun ChatPageContent(
     var previewMode by rememberSaveable { mutableStateOf(false) }
     var showCompressedMessages by rememberSaveable(conversation.id) { mutableStateOf(false) }
     var summaryEditorVisible by rememberSaveable(conversation.id) { mutableStateOf(false) }
+    var voiceCallVisible by rememberSaveable(conversation.id) { mutableStateOf(false) }
     val hazeState = rememberHazeState()
 
     TTSAutoPlay(vm = vm, setting = setting, conversation = conversation)
@@ -287,6 +289,9 @@ private fun ChatPageContent(
                     },
                     onSummaryEditorVisibilityChange = {
                         summaryEditorVisible = it
+                    },
+                    onOpenVoiceCall = {
+                        voiceCallVisible = true
                     },
                     onUpdateTitle = {
                         vm.updateTitle(it)
@@ -476,6 +481,25 @@ private fun ChatPageContent(
                 },
             )
         }
+        VoiceCallOverlay(
+            visible = voiceCallVisible,
+            conversation = conversation,
+            userAvatar = setting.displaySetting.userAvatar,
+            userName = setting.displaySetting.userNickname.ifBlank { "我" },
+            assistantAvatar = setting.getCurrentAssistant().avatar,
+            assistantName = setting.getCurrentAssistant().name.ifBlank { "AI" },
+            loadingJob = loadingJob,
+            hasChatModel = currentChatModel != null,
+            vm = vm,
+            onDismiss = {
+                voiceCallVisible = false
+            },
+            onMessageSubmitted = {
+                scope.launch {
+                    chatListState.requestScrollToItem(conversation.currentMessages.size + 5)
+                }
+            }
+        )
     }
 }
 
@@ -491,6 +515,7 @@ private fun TopBar(
     onToggleCompressedMessages: () -> Unit,
     onCompressedSummaryChange: (String?) -> Unit,
     onSummaryEditorVisibilityChange: (Boolean) -> Unit,
+    onOpenVoiceCall: () -> Unit,
     onNewChat: () -> Unit,
     onUpdateTitle: (String) -> Unit
 ) {
@@ -550,6 +575,12 @@ private fun TopBar(
             }
         },
         actions = {
+            IconButton(
+                onClick = onOpenVoiceCall
+            ) {
+                Icon(HugeIcons.Voice, "Voice call")
+            }
+
             if (
                 conversation.hasCompressedMessages ||
                 conversation.compressedMessageNodeIds.isNotEmpty() ||

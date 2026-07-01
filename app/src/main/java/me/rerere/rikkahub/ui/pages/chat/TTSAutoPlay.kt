@@ -5,6 +5,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import me.rerere.ai.core.MessageRole
+import me.rerere.rikkahub.service.ChatRequestMode
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.ui.context.LocalTTSState
@@ -17,7 +18,10 @@ fun TTSAutoPlay(vm: ChatVM, setting: Settings, conversation: Conversation) {
     val currentConversation by rememberUpdatedState(conversation)
     val updatedSetting by rememberUpdatedState(setting)
     LaunchedEffect(Unit) {
-        vm.generationDoneFlow.collect { conversationId ->
+        vm.generationDoneFlow.collect { event ->
+            if (event.conversationId != currentConversation.id || event.requestMode != ChatRequestMode.Normal) {
+                return@collect
+            }
             if (updatedSetting.displaySetting.autoPlayTTSAfterGeneration) {
                 val lastMessage = currentConversation.currentMessages.lastOrNull()
                 if (lastMessage != null && lastMessage.role == MessageRole.ASSISTANT) {

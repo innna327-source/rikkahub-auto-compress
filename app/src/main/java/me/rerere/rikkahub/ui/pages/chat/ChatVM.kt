@@ -38,7 +38,9 @@ import me.rerere.rikkahub.data.model.NodeFavoriteTarget
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.FavoriteRepository
 import me.rerere.rikkahub.service.ChatError
+import me.rerere.rikkahub.service.ChatRequestMode
 import me.rerere.rikkahub.service.ChatService
+import me.rerere.rikkahub.service.GenerationDoneEvent
 import me.rerere.rikkahub.ui.hooks.writeStringPreference
 import me.rerere.rikkahub.ui.hooks.ChatInputState
 import me.rerere.rikkahub.utils.UiState
@@ -133,7 +135,7 @@ class ChatVM(
     fun clearAllErrors() = chatService.clearAllErrors()
 
     // 生成完成
-    val generationDoneFlow: SharedFlow<Uuid> = chatService.generationDoneFlow
+    val generationDoneFlow: SharedFlow<GenerationDoneEvent> = chatService.generationDoneFlow
 
     // MCP管理器
     val mcpManager = chatService.mcpManager
@@ -186,11 +188,15 @@ class ChatVM(
      * @param content 消息内容
      * @param answer 是否触发消息生成，如果为false，则仅添加消息到消息列表中
      */
-    fun handleMessageSend(content: List<UIMessagePart>,answer: Boolean = true) {
+    fun handleMessageSend(
+        content: List<UIMessagePart>,
+        answer: Boolean = true,
+        requestMode: ChatRequestMode = ChatRequestMode.Normal,
+    ) {
         if (content.isEmptyInputMessage()) return
         analytics.logEvent("ai_send_message", null)
 
-        chatService.sendMessage(_conversationId, content, answer)
+        chatService.sendMessage(_conversationId, content, answer, requestMode)
     }
 
     fun handleMessageEdit(parts: List<UIMessagePart>, messageId: Uuid) {

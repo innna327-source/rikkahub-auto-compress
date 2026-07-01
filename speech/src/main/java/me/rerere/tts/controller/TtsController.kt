@@ -105,7 +105,7 @@ class TtsController(
      * - flush=true: 清空当前进度并重新开始
      * - flush=false: 继续队列，追加朗读
      */
-    fun speak(text: String, flush: Boolean = true) {
+    fun speak(text: String, flush: Boolean = true, chunked: Boolean = true) {
         if (text.isBlank()) return
         val provider = currentProvider
         if (provider == null) {
@@ -113,7 +113,11 @@ class TtsController(
             return
         }
 
-        val newChunks = chunker.split(text)
+        val newChunks = if (chunked) {
+            chunker.split(text)
+        } else {
+            listOf(TtsChunk(text = text.trim(), index = 0))
+        }
         if (newChunks.isEmpty()) return
 
         if (flush) {

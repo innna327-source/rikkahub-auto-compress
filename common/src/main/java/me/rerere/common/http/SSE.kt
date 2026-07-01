@@ -9,6 +9,7 @@ import okhttp3.Response
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
+import java.io.IOException
 
 /**
  * 代表 SSE 连接中的各种事件
@@ -74,8 +75,30 @@ fun OkHttpClient.sseFlow(request: Request): Flow<SseEvent> {
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 // 连接发生错误时触发
-                trySend(SseEvent.Failure(t, response))
-                channel.close(t) // 以异常关闭 Flow 通道
+                val responseBody = runCatching {
+                    response?.body?.string()
+                }.getOrNull()
+                val detailedError = when {
+                    response != null -> IOException(
+                        buildString {
+                            append("SSE request failed: HTTP ")
+                            append(response.code)
+                            if (response.message.isNotBlank()) {
+                                append(" ")
+                                append(response.message)
+                            }
+                            if (!responseBody.isNullOrBlank()) {
+                                append(": ")
+                                append(responseBody)
+                            }
+                        },
+                        t
+                    )
+
+                    else -> t
+                }
+                trySend(SseEvent.Failure(detailedError, response))
+                channel.close()
             }
         }
 

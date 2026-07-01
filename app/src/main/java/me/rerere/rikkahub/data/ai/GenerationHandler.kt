@@ -82,6 +82,8 @@ class GenerationHandler(
         conversationContextSummary: String? = null,
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         conversationLorebookIds: Set<Uuid> = emptySet(),
+        extraSystemPrompt: String? = null,
+        maxTokensOverride: Int? = null,
     ): Flow<GenerationChunk> = flow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
@@ -160,6 +162,8 @@ class GenerationHandler(
                     conversationContextSummary = conversationContextSummary,
                     conversationModeInjectionIds = conversationModeInjectionIds,
                     conversationLorebookIds = conversationLorebookIds,
+                    extraSystemPrompt = extraSystemPrompt,
+                    maxTokensOverride = maxTokensOverride,
                 )
                 messages = messages.visualTransforms(
                     transformers = outputTransformers,
@@ -353,6 +357,8 @@ class GenerationHandler(
         conversationContextSummary: String? = null,
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         conversationLorebookIds: Set<Uuid> = emptySet(),
+        extraSystemPrompt: String? = null,
+        maxTokensOverride: Int? = null,
     ) {
         val internalMessages = buildList {
             val system = buildString {
@@ -364,6 +370,13 @@ class GenerationHandler(
                     }
                 if (effectiveSystemPrompt.isNotBlank()) {
                     append(effectiveSystemPrompt)
+                }
+                if (!extraSystemPrompt.isNullOrBlank()) {
+                    if (isNotBlank()) {
+                        appendLine()
+                        appendLine()
+                    }
+                    append(extraSystemPrompt)
                 }
                 if (!conversationContextSummary.isNullOrBlank()) {
                     appendLine()
@@ -413,7 +426,7 @@ class GenerationHandler(
             model = model,
             temperature = assistant.temperature,
             topP = assistant.topP,
-            maxTokens = assistant.maxTokens,
+            maxTokens = maxTokensOverride ?: assistant.maxTokens,
             tools = tools,
             reasoningLevel = assistant.reasoningLevel,
             customHeaders = buildList {

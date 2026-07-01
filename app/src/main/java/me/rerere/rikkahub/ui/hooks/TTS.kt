@@ -87,9 +87,9 @@ interface CustomTtsState {
 
     /**
      * Speaks the given text using the selected TTS provider.
-     * Long texts will be automatically chunked and queued.
+     * Long texts will be automatically chunked and queued unless [chunked] is false.
      */
-    fun speak(text: String, flushCalled: Boolean = true)
+    fun speak(text: String, flushCalled: Boolean = true, chunked: Boolean = true)
 
     /** Stops the current speech and clears the queue. */
     fun stop()
@@ -138,7 +138,7 @@ private class CustomTtsStateImpl(
         controller.setProvider(provider)
     }
 
-    override fun speak(text: String, flushCalled: Boolean) {
+    override fun speak(text: String, flushCalled: Boolean, chunked: Boolean) {
         val settings = settingsStore.settingsFlow.value
         val processed = text.stripMarkdown().let {
             if (settings.displaySetting.ttsEnglishOnly) {
@@ -147,7 +147,7 @@ private class CustomTtsStateImpl(
                 it
             }
         }
-        controller.speak(processed, flushCalled)
+        controller.speak(processed, flushCalled, chunked)
     }
 
     override fun stop() {

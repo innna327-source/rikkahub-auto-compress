@@ -1,28 +1,92 @@
 package me.rerere.rikkahub.ui.pages.setting.components
 
+import android.content.Context
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.ui.components.ui.FormItem
 import me.rerere.rikkahub.ui.components.ui.OutlinedNumberInput
 import me.rerere.tts.provider.TTSProviderSetting
+import java.util.Base64
+
+private const val MIMO_MAX_BASE64_AUDIO_SIZE = 10 * 1024 * 1024
+
+private fun String.isMiMoVoiceDesignModel(): Boolean {
+    return equals("mimo-v2.5-tts-voicedesign", ignoreCase = true)
+}
+
+private fun String.isMiMoVoiceCloneModel(): Boolean {
+    return equals("mimo-v2.5-tts-voiceclone", ignoreCase = true)
+}
+
+private data class MiMoTtsMode(
+    val label: String,
+    val model: String,
+)
+
+private val miMoTtsModes = listOf(
+    MiMoTtsMode("预置音色", "mimo-v2.5-tts"),
+    MiMoTtsMode("文本设置音色", "mimo-v2.5-tts-voicedesign"),
+    MiMoTtsMode("音频克隆音色", "mimo-v2.5-tts-voiceclone"),
+)
+
+private fun String.isMiMoAudioDataUrl(): Boolean {
+    return startsWith("data:audio/", ignoreCase = true) && contains(";base64,", ignoreCase = true)
+}
+
+private fun Context.readMiMoVoiceCloneAudioDataUrl(uri: Uri): String {
+    val mimeType = contentResolver.getType(uri).toMiMoAudioMimeType(uri)
+        ?: error("Only mp3 and wav audio samples are supported")
+    val audioBytes = contentResolver.openInputStream(uri)?.use { input ->
+        input.readBytes()
+    } ?: error("Unable to read selected audio")
+    val encoded = Base64.getEncoder().encodeToString(audioBytes)
+    if (encoded.length > MIMO_MAX_BASE64_AUDIO_SIZE) {
+        error("Base64 audio sample must be 10 MB or smaller")
+    }
+    return "data:$mimeType;base64,$encoded"
+}
+
+private fun String?.toMiMoAudioMimeType(uri: Uri): String? {
+    val normalized = this?.lowercase()
+    return when {
+        normalized in setOf("audio/mpeg", "audio/mp3") -> "audio/mpeg"
+        normalized in setOf("audio/wav", "audio/x-wav", "audio/wave") -> "audio/wav"
+        uri.toString().lowercase().endsWith(".mp3") -> "audio/mpeg"
+        uri.toString().lowercase().endsWith(".wav") -> "audio/wav"
+        else -> null
+    }
+}
 
 @Composable
 fun TTSProviderConfigure(
@@ -281,6 +345,36 @@ private fun MiMoTTSConfiguration(
     setting: TTSProviderSetting.MiMo,
     onValueChange: (TTSProviderSetting) -> Unit
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val isVoiceCloneModel = setting.model.isMiMoVoiceCloneModel()
+    val isAudioDataUrl = setting.voice.isMiMoAudioDataUrl()
+    var modeExpanded by remember { mutableStateOf(false) }
+    var audioImportError by remember { mutableStateOf<String?>(null) }
+    var isImportingAudio by remember { mutableStateOf(false) }
+    val selectedMode = miMoTtsModes.firstOrNull {
+        setting.model.equals(it.model, ignoreCase = true)
+    }
+    val audioPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            isImportingAudio = true
+            audioImportError = null
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    context.readMiMoVoiceCloneAudioDataUrl(uri)
+                }
+            }.onSuccess { dataUrl ->
+                onValueChange(setting.copy(voice = dataUrl))
+            }.onFailure { throwable ->
+                audioImportError = throwable.message ?: "Failed to import audio"
+            }
+            isImportingAudio = false
+        }
+    }
+
     // MiMo 配置均为自由输入 默认值只是占位
     // API Key
     FormItem(
@@ -312,6 +406,50 @@ private fun MiMoTTSConfiguration(
         )
     }
 
+    // Mode
+    FormItem(
+        label = { Text("模式") },
+        description = { Text("选择预置音色、文本设置音色或音频克隆音色") }
+    ) {
+        ExposedDropdownMenuBox(
+            expanded = modeExpanded,
+            onExpandedChange = { modeExpanded = !modeExpanded }
+        ) {
+            OutlinedTextField(
+                value = selectedMode?.label ?: "自定义模型",
+                onValueChange = {},
+                readOnly = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                trailingIcon = {
+                    ExposedDropdownMenuDefaults.TrailingIcon(modeExpanded)
+                }
+            )
+            ExposedDropdownMenu(
+                expanded = modeExpanded,
+                onDismissRequest = { modeExpanded = false }
+            ) {
+                miMoTtsModes.forEach { mode ->
+                    DropdownMenuItem(
+                        text = { Text(mode.label) },
+                        onClick = {
+                            modeExpanded = false
+                            val nextVoice = when {
+                                mode.model.isMiMoVoiceCloneModel() && !isAudioDataUrl -> ""
+                                mode.model.isMiMoVoiceDesignModel() && isAudioDataUrl -> ""
+                                !mode.model.isMiMoVoiceCloneModel() && isAudioDataUrl -> "mimo_default"
+                                else -> setting.voice
+                            }
+                            onValueChange(setting.copy(model = mode.model, voice = nextVoice))
+                            audioImportError = null
+                        }
+                    )
+                }
+            }
+        }
+    }
+
     // Model
     FormItem(
         label = { Text(stringResource(R.string.setting_tts_page_model)) },
@@ -333,13 +471,69 @@ private fun MiMoTTSConfiguration(
         description = { Text(stringResource(R.string.setting_tts_page_voice_description)) }
     ) {
         OutlinedTextField(
-            value = setting.voice,
+            value = if (isAudioDataUrl) "Audio sample selected" else setting.voice,
             onValueChange = { newVoice ->
                 onValueChange(setting.copy(voice = newVoice))
             },
+            readOnly = isAudioDataUrl,
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("mimo_default") }
+            placeholder = {
+                Text(
+                    when {
+                        isVoiceCloneModel -> "Upload mp3/wav audio or paste data:audio/...;base64,..."
+                        setting.model.isMiMoVoiceDesignModel() -> "Voice description"
+                        else -> "mimo_default"
+                    }
+                )
+            }
         )
+        if (isVoiceCloneModel) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Button(
+                    onClick = {
+                        audioPickerLauncher.launch(
+                            arrayOf(
+                                "audio/mpeg",
+                                "audio/mp3",
+                                "audio/wav",
+                                "audio/x-wav",
+                            )
+                        )
+                    },
+                    enabled = !isImportingAudio,
+                ) {
+                    Text(if (isImportingAudio) "Importing..." else "Upload audio")
+                }
+                if (isAudioDataUrl) {
+                    TextButton(
+                        onClick = {
+                            onValueChange(setting.copy(voice = ""))
+                            audioImportError = null
+                        }
+                    ) {
+                        Text("Clear")
+                    }
+                }
+            }
+            audioImportError?.let { error ->
+                Text(
+                    text = error,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (isAudioDataUrl) {
+                Text(
+                    text = "Audio sample is stored in Voice",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
     }
 }
 

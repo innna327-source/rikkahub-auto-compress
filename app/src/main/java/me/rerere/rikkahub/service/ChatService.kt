@@ -98,6 +98,21 @@ import kotlin.uuid.Uuid
 private const val TAG = "ChatService"
 private const val MIN_COMPRESSION_CHUNK_TOKENS = 8000
 private const val COMPRESSION_CHUNK_TOKENS_PER_TARGET_TOKEN = 8
+private const val VOICE_CALL_SYSTEM_PROMPT = """
+你正在语音通话模式中回复用户。
+请像真实电话聊天一样自然、简短、连贯地说话。
+先用一句很短的话回应用户。
+每一句都尽量短，适合一句一句朗读。
+每一句都必须用句号、问号或感叹号结束。
+每段最多 1 到 2 句话，一次通常控制在 2 到 4 个短段内。
+不使用 Markdown 表格，不写长列表。
+如果需要解释复杂问题，分成几个容易朗读的小块。
+一次最多问用户一个问题。
+不要使用任何表情、emoji 或颜文字。
+不要输出贴纸、表情包、颜文字、ASCII 表情或类似“(≧▽≦)”的符号组合。
+任何 emoji、颜文字、表情包文本都会被系统硬性删除。
+不要把语音标签、表演标签写进正文。
+"""
 
 data class ChatError(
     val id: Uuid = Uuid.random(),
@@ -106,6 +121,11 @@ data class ChatError(
     val conversationId: Uuid? = null,
     val timestamp: Long = System.currentTimeMillis(),
     val solution: ChatErrorSolution? = null,
+)
+
+data class GenerationDoneEvent(
+    val conversationId: Uuid,
+    val requestMode: ChatRequestMode,
 )
 
 enum class ChatErrorSolution {
@@ -173,8 +193,8 @@ class ChatService(
     }
 
     // 生成完成流
-    private val _generationDoneFlow = MutableSharedFlow<Uuid>()
-    val generationDoneFlow: SharedFlow<Uuid> = _generationDoneFlow.asSharedFlow()
+    private val _generationDoneFlow = MutableSharedFlow<GenerationDoneEvent>()
+    val generationDoneFlow: SharedFlow<GenerationDoneEvent> = _generationDoneFlow.asSharedFlow()
 
     // 前台状态管理
     private val _isForeground = MutableStateFlow(false)
@@ -308,7 +328,12 @@ class ChatService(
 
     // ---- 发送消息 ----
 
-    fun sendMessage(conversationId: Uuid, content: List<UIMessagePart>, answer: Boolean = true) {
+    fun sendMessage(
+        conversationId: Uuid,
+        content: List<UIMessagePart>,
+        answer: Boolean = true,
+        requestMode: ChatRequestMode = ChatRequestMode.Normal,
+    ) {
         if (content.isEmptyInputMessage()) return
 
         val session = getOrCreateSession(conversationId)
@@ -337,10 +362,15 @@ class ChatService(
                         conversationId = conversationId,
                         conversation = getConversationFlow(conversationId).value
                     )
-                    handleMessageComplete(conversationId)
+                    handleMessageComplete(conversationId, requestMode = requestMode)
                 }
 
-                _generationDoneFlow.emit(conversationId)
+                _generationDoneFlow.emit(
+                    GenerationDoneEvent(
+                        conversationId = conversationId,
+                        requestMode = requestMode,
+                    )
+                )
             } catch (e: Exception) {
                 e.printStackTrace()
                 addError(e, conversationId, title = context.getString(R.string.error_title_send_message))
@@ -400,7 +430,12 @@ class ChatService(
                     }
                 }
 
-                _generationDoneFlow.emit(conversationId)
+                _generationDoneFlow.emit(
+                    GenerationDoneEvent(
+                        conversationId = conversationId,
+                        requestMode = ChatRequestMode.Normal,
+                    )
+                )
             } catch (e: Exception) {
                 addError(e, conversationId, title = context.getString(R.string.error_title_regenerate_message))
             }
@@ -463,7 +498,12 @@ class ChatService(
                     handleMessageComplete(conversationId)
                 }
 
-                _generationDoneFlow.emit(conversationId)
+                _generationDoneFlow.emit(
+                    GenerationDoneEvent(
+                        conversationId = conversationId,
+                        requestMode = ChatRequestMode.Normal,
+                    )
+                )
             } catch (e: Exception) {
                 addError(e, conversationId, title = context.getString(R.string.error_title_tool_approval))
             }
@@ -476,7 +516,8 @@ class ChatService(
 
     private suspend fun handleMessageComplete(
         conversationId: Uuid,
-        messageRange: ClosedRange<Int>? = null
+        messageRange: ClosedRange<Int>? = null,
+        requestMode: ChatRequestMode = ChatRequestMode.Normal,
     ) {
         val settings = settingsStore.settingsFlow.first()
         val initialConversation = getConversationFlow(conversationId).value
@@ -522,6 +563,14 @@ class ChatService(
                 conversationContextSummary = conversation.compressedSummary,
                 conversationModeInjectionIds = conversation.modeInjectionIds,
                 conversationLorebookIds = conversation.lorebookIds,
+                extraSystemPrompt = when (requestMode) {
+                    ChatRequestMode.Normal -> null
+                    ChatRequestMode.VoiceCall -> VOICE_CALL_SYSTEM_PROMPT.trimIndent()
+                },
+                maxTokensOverride = when (requestMode) {
+                    ChatRequestMode.Normal -> null
+                    ChatRequestMode.VoiceCall -> minOf(assistant.maxTokens ?: 300, 300)
+                },
                 memories = if (assistant.useGlobalMemory) {
                     memoryRepository.getGlobalMemories()
                 } else {
@@ -580,13 +629,17 @@ class ChatService(
             }.collect { chunk ->
                 when (chunk) {
                     is GenerationChunk.Messages -> {
+                        val chunkMessages = when (requestMode) {
+                            ChatRequestMode.Normal -> chunk.messages
+                            ChatRequestMode.VoiceCall -> chunk.messages
+                        }
                         val updatedConversation = getConversationFlow(conversationId).value
-                            .updateCurrentMessages(chunk.messages)
+                            .updateCurrentMessages(chunkMessages)
                         updateConversation(conversationId, updatedConversation)
 
                         // 如果应用不在前台，发送 Live Update 通知
                         if (!isForeground.value && settings.displaySetting.enableNotificationOnMessageGeneration && settings.displaySetting.enableLiveUpdateNotification) {
-                            sendLiveUpdateNotification(conversationId, chunk.messages, senderName)
+                            sendLiveUpdateNotification(conversationId, chunkMessages, senderName)
                         }
                     }
                 }
@@ -594,6 +647,10 @@ class ChatService(
         }.onFailure {
             // 取消 Live Update 通知
             cancelLiveUpdateNotification(conversationId)
+
+            if (it is CancellationException) {
+                return@onFailure
+            }
 
             it.printStackTrace()
             addError(it, conversationId, title = context.getString(R.string.error_title_generation))
@@ -1423,6 +1480,24 @@ class ChatService(
             )
         )
         saveConversation(conversationId, updatedConversation)
+    }
+}
+
+private fun List<UIMessage>.sanitizeVoiceCallOutput(): List<UIMessage> {
+    return map { message ->
+        if (message.role != MessageRole.ASSISTANT) {
+            message
+        } else {
+            message.copy(
+                parts = message.parts.map { part ->
+                    when (part) {
+                        is UIMessagePart.Text -> part.copy(text = part.text.sanitizeVoiceCallTextForOutput())
+                        is UIMessagePart.Reasoning -> part.copy(reasoning = part.reasoning.sanitizeVoiceCallTextForOutput())
+                        else -> part
+                    }
+                }
+            )
+        }
     }
 }
 

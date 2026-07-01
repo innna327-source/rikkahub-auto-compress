@@ -274,7 +274,7 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
             0 -> TTSProviderList(
                 settings = settings,
                 onUpdateSettings = vm::updateSettings,
-                onEdit = { editingTTSProvider = it },
+                onEdit = { editingTTSProvider = it.normalizeKnownTtsProvider() },
                 isSpeaking = isPreviewSpeaking,
                 previewingProviderId = previewingProviderId,
                 onTest = ::testTtsProvider,

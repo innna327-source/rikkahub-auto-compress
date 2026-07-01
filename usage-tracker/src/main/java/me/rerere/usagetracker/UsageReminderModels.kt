@@ -35,6 +35,7 @@ data class UsageReminderAppState(
     val reminderCount: Int = 0,
     val ignored: Boolean = false,
     val lastEventTimeMillis: Long = 0L,
+    val lastReminderUsageMillis: Long = 0L,
 )
 
 data class ForegroundAppEvent(
